@@ -11,7 +11,9 @@ import "./interfaces/LinkTokenInterface.sol";
 contract Coordinator is ChainlinkRequestInterface, CoordinatorInterface {
   using SafeMath for uint256;
 
+  uint256 constant public PRECISION = 5;
   uint256 constant public EXPIRY_TIME = 5 minutes;
+
   LinkTokenInterface internal LINK;
 
   struct ServiceAgreement {
@@ -327,15 +329,25 @@ contract Coordinator is ChainlinkRequestInterface, CoordinatorInterface {
    * @param _oracles is the list of oracle addresses
    */
   function aggregateAndPay(bytes32 _requestId, uint256 _paymentAmount, address[] memory _oracles) private returns (uint256) {
-    uint256 result;
+    uint divisor;
+    uint multiplier;
+    uint result;
     uint256 oraclePayment = _paymentAmount.div(_oracles.length);
+    if (_oracles.length <= PRECISION) {
+      divisor = _oracles.length;
+      multiplier = _oracles.length;
+    } else {
+      divisor = _oracles.length;
+      multiplier = PRECISION;
+    }
     for (uint i = 0; i < _oracles.length; i++) {
-      result = result.add(callbacks[_requestId].responses[_oracles[i]]); // aggregate answers
+      uint intermediate = callbacks[_requestId].responses[_oracles[i]].mul(multiplier).div(divisor);
+      result = result.add(intermediate); // aggregate answers
       delete callbacks[_requestId].responses[_oracles[i]]; // must explicitly clean-up mappings for gas refund
       withdrawableTokens[_oracles[i]] = withdrawableTokens[_oracles[i]].add(oraclePayment);
     }
     delete callbacks[_requestId];
-    return result.div(_oracles.length); // average aggregated answers
+    return result.div(multiplier);
   }
 
   /**

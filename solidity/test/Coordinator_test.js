@@ -12,6 +12,7 @@ contract('Coordinator', () => {
 
   it('has a limited public interface', () => {
     h.checkPublicABI(artifacts.require(sourcePath), [
+      'PRECISION',
       'EXPIRY_TIME',
       'cancelOracleRequest',
       'fulfillOracleRequest',
@@ -583,6 +584,61 @@ contract('Coordinator', () => {
           assertBigNum(h.bigNum(17), currentValue)
           assert.notEqual(0, await mock.requestId.call()) // check if called
         })
+      })
+    })
+
+    context('when aggregating many answers', () => {
+      let request
+      let oracles = []
+
+      beforeEach(async () => {
+        for (let i = 0; i < h.accounts.length; i++) {
+          oracles.push(h.accounts[i])
+        }
+
+        agreement = await h.newServiceAgreement({
+          oracles: oracles 
+        })
+        let tx = await h.initiateServiceAgreement(coordinator, agreement)
+        assert.equal(tx.logs[0].args.said, agreement.id)
+
+        mock = await h.deploy('examples/GetterSetter.sol')
+        const fHash = h.functionSelector('requestedUint256(bytes32,uint256)')
+
+        const payload = h.executeServiceAgreementBytes(
+          agreement.id,
+          mock.address,
+          fHash,
+          1,
+          ''
+        )
+        tx = await link.transferAndCall(
+          coordinator.address,
+          agreement.payment,
+          payload
+        )
+        request = h.decodeRunRequest(tx.receipt.logs[2])
+      })
+
+      it('sets an approximation of the average of the reported values', async () => {
+        for (let i = 0; i < oracles.length - 1; i++) {
+          await coordinator.fulfillOracleRequest(
+            request.id, 
+            // Use a very large number that would cause simple averaging to overflow
+            '11579208923731619542357098500868790785326998466564056403945758400791312963994', 
+            { from: oracles[i] }
+          )
+        }
+        const lastTx = await coordinator.fulfillOracleRequest(
+          request.id, 
+          // Use a very large number that would cause simple averaging to overflow
+          '11579208923731619542357098500868790785326998466564056403945758400791312963994', 
+          { from: oracles[oracles.length - 1] }
+        )
+        assert.equal(lastTx.receipt.logs.length, 1)
+        const currentValue = await mock.getUint256.call()
+        // Check that the answer was correctly averaged
+        assert.equal(currentValue.sub(h.bigNum('11579208923731619542357098500868790785326998466564056403945758400791312963994')).toString(), '0')
       })
     })
 
